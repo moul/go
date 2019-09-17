@@ -37,6 +37,7 @@ require (
 	github.com/goji/httpauth v0.0.0-20160601135302-2da839ab0f4d
 	github.com/gomodule/redigo v2.0.0+incompatible
 	github.com/google/go-querystring v0.0.0-20160401233042-9235644dd9e5 // indirect
+	github.com/gorilla/schema v1.1.0
 	github.com/graph-gophers/graphql-go v0.0.0-20190225005345-3e8838d4614c
 	github.com/guregu/null v2.1.3-0.20151024101046-79c5bd36b615+incompatible
 	github.com/haltingstate/secp256k1-go v0.0.0-20151224084235-572209b26df6

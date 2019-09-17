@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-chi/chi"
+	"github.com/gorilla/schema"
 
 	"github.com/stellar/go/amount"
 	"github.com/stellar/go/services/horizon/internal/assets"
@@ -639,4 +640,25 @@ func FullURL(ctx context.Context) *url.URL {
 		url.RawQuery = r.URL.RawQuery
 	}
 	return url
+}
+
+// Note from chi: it is a good idea to set a Decoder instance as a package
+// global, because it caches meta-data about structs, and an instance can be
+// shared safely:
+var decoder = schema.NewDecoder()
+
+// GetParams fills a struct with values read from a request's query parameters.
+func GetParams(dst interface{}, r *http.Request) error {
+	query := r.URL.Query()
+
+	// Merge chi's URLParams with URL Query Params. Given
+	// `/accounts/{account_id}/transactions?foo=bar`, chi's URLParams will
+	// contain `account_id` and URL Query params will contain `foo`.
+	if rctx := chi.RouteContext(r.Context()); rctx != nil {
+		for _, key := range rctx.URLParams.Keys {
+			query.Set(key, rctx.URLParam(key))
+		}
+	}
+
+	return decoder.Decode(dst, query)
 }
