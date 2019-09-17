@@ -5,10 +5,12 @@ import (
 	"net/http"
 
 	"github.com/stellar/go/protocols/horizon"
+	"github.com/stellar/go/services/horizon/internal/db2"
 	"github.com/stellar/go/services/horizon/internal/db2/history"
 	"github.com/stellar/go/services/horizon/internal/resourceadapter"
 	"github.com/stellar/go/support/errors"
 	"github.com/stellar/go/support/render/hal"
+	"github.com/stellar/go/support/render/problem"
 	"github.com/stellar/go/xdr"
 )
 
@@ -17,32 +19,129 @@ type GetOffersHandler struct {
 	HistoryQ *history.Q
 }
 
+// QueryParams query struct for pagination params
+// TODO: move a shared package - maybe even db2
+type QueryParams struct {
+	Cursor string `schema:"cursor"`
+	Order  string `schema:"order"`
+	Limit  uint64 `schema:"limit"`
+}
+
+// OffersQuery query struct for offers end-point
+type OffersQuery struct {
+	QueryParams
+	Seller              string `schema:"seller"`
+	SellingAssetType    string `schema:"selling_asset_type"`
+	SellingAsssetIssuer string `schema:"selling_asset_issuer"`
+	SellingAsssetCode   string `schema:"selling_asset_code"`
+	BuyingAssetType     string `schema:"buying_asset_type"`
+	BuyingAsssetIssuer  string `schema:"buying_asset_issuer"`
+	BuyingAsssetCode    string `schema:"buying_asset_code"`
+}
+
+// PageQuery returns the page query.
+func (q OffersQuery) PageQuery() (db2.PageQuery, error) {
+	pageQuery, err := db2.NewPageQuery(q.Cursor, true, q.Order, q.Limit)
+
+	if err != nil {
+		return pageQuery, problem.MakeInvalidFieldProblem(
+			"pagination parameters",
+			err,
+		)
+	}
+
+	return pageQuery, nil
+}
+
+// HasSelling returns whether the query has a selling asset param or not.
+func (q OffersQuery) HasSelling() bool {
+	return len(q.SellingAssetType) > 0
+}
+
+// Selling an xdr.Asset representing the selling side of the offer.
+func (q OffersQuery) Selling() (xdr.Asset, error) {
+	selling, err := BuildAsset(q.SellingAssetType, q.SellingAsssetIssuer, q.SellingAsssetCode)
+
+	if err != nil {
+		return selling, problem.MakeInvalidFieldProblem(
+			// unfortunate effect here we loss the ability to tell exactly which
+			// param is wrong
+			"selling asset",
+			err,
+		)
+	}
+
+	return selling, nil
+}
+
+// HasBuying returns whether the query has a buying asset param or not.
+func (q OffersQuery) HasBuying() bool {
+	return len(q.SellingAssetType) > 0
+}
+
+// Buying an xdr.Asset representing the buying side of the offer.
+func (q OffersQuery) Buying() (xdr.Asset, error) {
+	buying, err := BuildAsset(q.BuyingAssetType, q.BuyingAsssetIssuer, q.BuyingAsssetCode)
+
+	if err != nil {
+		return buying, problem.MakeInvalidFieldProblem(
+			"buying asset",
+			err,
+		)
+	}
+
+	return buying, nil
+}
+
+// SellerAccountID returns an xdr.AcccountID for the given seller query param.
+func (q OffersQuery) SellerAccountID() (xdr.AccountId, error) {
+	return buildAccountID(q.Seller)
+}
+
 // GetResourcePage returns a page of offers.
 func (handler GetOffersHandler) GetResourcePage(r *http.Request) ([]hal.Pageable, error) {
 	ctx := r.Context()
-	pq, err := GetPageQuery(r)
+	qp := OffersQuery{}
+	err := GetParams(&qp, r)
+
 	if err != nil {
 		return nil, err
 	}
 
-	seller, err := GetString(r, "seller")
+	pq, err := qp.PageQuery()
+
+	if err != nil {
+		return nil, err
+	}
+
+	seller, err := qp.SellerAccountID()
+
 	if err != nil {
 		return nil, err
 	}
 
 	var selling *xdr.Asset
-	if sellingAsset, found := MaybeGetAsset(r, "selling_"); found {
+	if qp.HasSelling() {
+		sellingAsset, err := qp.Selling()
+		if err != nil {
+			return nil, err
+		}
 		selling = &sellingAsset
 	}
 
 	var buying *xdr.Asset
-	if buyingAsset, found := MaybeGetAsset(r, "buying_"); found {
+
+	if qp.HasBuying() {
+		buyingAsset, err := qp.Buying()
+		if err != nil {
+			return nil, err
+		}
 		buying = &buyingAsset
 	}
 
 	query := history.OffersQuery{
 		PageQuery: pq,
-		SellerID:  seller,
+		SellerID:  seller.Address(),
 		Selling:   selling,
 		Buying:    buying,
 	}
