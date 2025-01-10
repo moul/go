@@ -3,9 +3,10 @@ package ingest
 import (
 	"testing"
 
-	"github.com/stellar/go/xdr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/stellar/go/xdr"
 )
 
 func TestChangeAccountChangedExceptSignersInvalidType(t *testing.T) {
@@ -21,8 +22,241 @@ func TestChangeAccountChangedExceptSignersInvalidType(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestGetContractEventsEmpty(t *testing.T) {
+	tx := LedgerTransaction{
+		FeeChanges: xdr.LedgerEntryChanges{},
+		UnsafeMeta: xdr.TransactionMeta{
+			V: 3,
+			V3: &xdr.TransactionMetaV3{
+				SorobanMeta: &xdr.SorobanTransactionMeta{
+					Events: []xdr.ContractEvent{},
+				},
+			},
+		},
+	}
+
+	events, err := tx.GetDiagnosticEvents()
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+}
+
+func TestGetContractEventsSingle(t *testing.T) {
+	value := xdr.Uint32(1)
+	tx := LedgerTransaction{
+		FeeChanges: xdr.LedgerEntryChanges{},
+		UnsafeMeta: xdr.TransactionMeta{
+			V: 3,
+			V3: &xdr.TransactionMetaV3{
+				SorobanMeta: &xdr.SorobanTransactionMeta{
+					Events: []xdr.ContractEvent{
+						{
+							Type: xdr.ContractEventTypeSystem,
+							Body: xdr.ContractEventBody{
+								V: 0,
+								V0: &xdr.ContractEventV0{
+									Data: xdr.ScVal{Type: xdr.ScValTypeScvU32, U32: &value},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	events, err := tx.GetDiagnosticEvents()
+	assert.Len(t, events, 1)
+	assert.True(t, events[0].InSuccessfulContractCall)
+	assert.Equal(t, *events[0].Event.Body.V0.Data.U32, value)
+
+	tx.UnsafeMeta.V = 0
+	_, err = tx.GetDiagnosticEvents()
+	assert.EqualError(t, err, "unsupported TransactionMeta version: 0")
+
+	tx.UnsafeMeta.V = 4
+	_, err = tx.GetDiagnosticEvents()
+	assert.EqualError(t, err, "unsupported TransactionMeta version: 4")
+
+	tx.UnsafeMeta.V = 1
+	events, err = tx.GetDiagnosticEvents()
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+
+	tx.UnsafeMeta.V = 2
+	events, err = tx.GetDiagnosticEvents()
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+}
+
+func TestGetContractEventsMultiple(t *testing.T) {
+	values := make([]xdr.Uint32, 2)
+	for i := range values {
+		values[i] = xdr.Uint32(i)
+	}
+	tx := LedgerTransaction{
+		FeeChanges: xdr.LedgerEntryChanges{},
+		UnsafeMeta: xdr.TransactionMeta{
+			V: 3,
+			V3: &xdr.TransactionMetaV3{
+				SorobanMeta: &xdr.SorobanTransactionMeta{
+					Events: []xdr.ContractEvent{
+						{
+							Type: xdr.ContractEventTypeSystem,
+							Body: xdr.ContractEventBody{
+								V: 0,
+								V0: &xdr.ContractEventV0{
+									Data: xdr.ScVal{Type: xdr.ScValTypeScvU32, U32: &values[0]},
+								},
+							},
+						},
+						{
+							Type: xdr.ContractEventTypeSystem,
+							Body: xdr.ContractEventBody{
+								V: 0,
+								V0: &xdr.ContractEventV0{
+									Data: xdr.ScVal{Type: xdr.ScValTypeScvU32, U32: &values[1]},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	events, err := tx.GetDiagnosticEvents()
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	assert.True(t, events[0].InSuccessfulContractCall)
+	assert.Equal(t, *events[0].Event.Body.V0.Data.U32, values[0])
+	assert.True(t, events[1].InSuccessfulContractCall)
+	assert.Equal(t, *events[1].Event.Body.V0.Data.U32, values[1])
+}
+
+func TestGetDiagnosticEventsEmpty(t *testing.T) {
+	tx := LedgerTransaction{
+		FeeChanges: xdr.LedgerEntryChanges{},
+		UnsafeMeta: xdr.TransactionMeta{
+			V: 3,
+			V3: &xdr.TransactionMetaV3{
+				SorobanMeta: &xdr.SorobanTransactionMeta{
+					DiagnosticEvents: []xdr.DiagnosticEvent{},
+				},
+			},
+		},
+	}
+
+	events, err := tx.GetDiagnosticEvents()
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+}
+
+func TestGetDiagnosticEventsSingle(t *testing.T) {
+	value := xdr.Uint32(1)
+	tx := LedgerTransaction{
+		FeeChanges: xdr.LedgerEntryChanges{},
+		UnsafeMeta: xdr.TransactionMeta{
+			V: 3,
+			V3: &xdr.TransactionMetaV3{
+				SorobanMeta: &xdr.SorobanTransactionMeta{
+					DiagnosticEvents: []xdr.DiagnosticEvent{
+						{
+							InSuccessfulContractCall: false,
+							Event: xdr.ContractEvent{
+								Type: xdr.ContractEventTypeSystem,
+								Body: xdr.ContractEventBody{
+									V: 0,
+									V0: &xdr.ContractEventV0{
+										Data: xdr.ScVal{Type: xdr.ScValTypeScvU32, U32: &value},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	events, err := tx.GetDiagnosticEvents()
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	assert.False(t, events[0].InSuccessfulContractCall)
+	assert.Equal(t, *events[0].Event.Body.V0.Data.U32, value)
+
+	tx.UnsafeMeta.V = 0
+	_, err = tx.GetDiagnosticEvents()
+	assert.EqualError(t, err, "unsupported TransactionMeta version: 0")
+
+	tx.UnsafeMeta.V = 4
+	_, err = tx.GetDiagnosticEvents()
+	assert.EqualError(t, err, "unsupported TransactionMeta version: 4")
+
+	tx.UnsafeMeta.V = 1
+	events, err = tx.GetDiagnosticEvents()
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+
+	tx.UnsafeMeta.V = 2
+	events, err = tx.GetDiagnosticEvents()
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+}
+
+func TestGetDiagnosticEventsMultiple(t *testing.T) {
+	values := make([]xdr.Uint32, 2)
+	for i := range values {
+		values[i] = xdr.Uint32(i)
+	}
+	tx := LedgerTransaction{
+		FeeChanges: xdr.LedgerEntryChanges{},
+		UnsafeMeta: xdr.TransactionMeta{
+			V: 3,
+			V3: &xdr.TransactionMetaV3{
+				SorobanMeta: &xdr.SorobanTransactionMeta{
+					DiagnosticEvents: []xdr.DiagnosticEvent{
+						{
+							InSuccessfulContractCall: true,
+
+							Event: xdr.ContractEvent{
+								Type: xdr.ContractEventTypeSystem,
+								Body: xdr.ContractEventBody{
+									V: 0,
+									V0: &xdr.ContractEventV0{
+										Data: xdr.ScVal{Type: xdr.ScValTypeScvU32, U32: &values[0]},
+									},
+								},
+							},
+						},
+						{
+							InSuccessfulContractCall: true,
+							Event: xdr.ContractEvent{
+								Type: xdr.ContractEventTypeSystem,
+								Body: xdr.ContractEventBody{
+									V: 0,
+									V0: &xdr.ContractEventV0{
+										Data: xdr.ScVal{Type: xdr.ScValTypeScvU32, U32: &values[1]},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	events, err := tx.GetDiagnosticEvents()
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	assert.True(t, events[0].InSuccessfulContractCall)
+	assert.Equal(t, *events[0].Event.Body.V0.Data.U32, values[0])
+	assert.True(t, events[1].InSuccessfulContractCall)
+	assert.Equal(t, *events[1].Event.Body.V0.Data.U32, values[1])
+}
+
 func TestFeeMetaAndOperationsChangesSeparate(t *testing.T) {
 	tx := LedgerTransaction{
+		LedgerVersion: 12,
 		FeeChanges: xdr.LedgerEntryChanges{
 			xdr.LedgerEntryChange{
 				Type: xdr.LedgerEntryChangeTypeLedgerEntryState,
@@ -112,6 +346,21 @@ func TestFeeMetaAndOperationsChangesSeparate(t *testing.T) {
 	operationChanges, err = tx.GetOperationChanges(0)
 	assert.NoError(t, err)
 	assert.Len(t, operationChanges, 0)
+
+	// Starting from protocol 13, we no longer need to ignore txInternalError
+	tx.LedgerVersion = 13
+
+	metaChanges, err = tx.GetChanges()
+	assert.NoError(t, err)
+	assert.Len(t, metaChanges, 1)
+	assert.Equal(t, metaChanges[0].Pre.Data.MustAccount().Balance, xdr.Int64(300))
+	assert.Equal(t, metaChanges[0].Post.Data.MustAccount().Balance, xdr.Int64(400))
+
+	operationChanges, err = tx.GetOperationChanges(0)
+	assert.NoError(t, err)
+	assert.Len(t, operationChanges, 1)
+	assert.Equal(t, operationChanges[0].Pre.Data.MustAccount().Balance, xdr.Int64(300))
+	assert.Equal(t, operationChanges[0].Post.Data.MustAccount().Balance, xdr.Int64(400))
 }
 
 func TestFailedTransactionOperationChangesMeta(t *testing.T) {
@@ -561,407 +810,4 @@ func TestChangeAccountChangedExceptSignersNoChanges(t *testing.T) {
 
 	assert.NotNil(t, change.Post.Data.Account.Signers)
 	assert.Len(t, change.Post.Data.Account.Signers, 1)
-}
-
-func TestChangeAccountSignersChangedInvalidType(t *testing.T) {
-	change := Change{
-		Type: xdr.LedgerEntryTypeOffer,
-	}
-
-	assert.Panics(t, func() {
-		change.AccountSignersChanged()
-	})
-}
-
-func TestChangeAccountSignersChangedNoPre(t *testing.T) {
-	change := Change{
-		Type: xdr.LedgerEntryTypeAccount,
-		Pre:  nil,
-		Post: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-				},
-			},
-		},
-	}
-
-	assert.True(t, change.AccountSignersChanged())
-}
-
-func TestChangeAccountSignersChangedNoPostMasterKey(t *testing.T) {
-	change := Change{
-		Type: xdr.LedgerEntryTypeAccount,
-		Pre: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-					// Master weight = 1
-					Thresholds: [4]byte{1, 1, 1, 1},
-				},
-			},
-		},
-		Post: nil,
-	}
-
-	assert.True(t, change.AccountSignersChanged())
-}
-
-func TestChangeAccountSignersChangedNoPostNoMasterKey(t *testing.T) {
-	change := Change{
-		Type: xdr.LedgerEntryTypeAccount,
-		Pre: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-					// Master weight = 0
-					Thresholds: [4]byte{0, 1, 1, 1},
-				},
-			},
-		},
-		Post: nil,
-	}
-
-	// Account being merge can still have signers so they will be removed.
-	assert.True(t, change.AccountSignersChanged())
-}
-
-func TestChangeAccountSignersChangedMasterKeyRemoved(t *testing.T) {
-	change := Change{
-		Type: xdr.LedgerEntryTypeAccount,
-		Pre: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-					// Master weight = 1
-					Thresholds: [4]byte{1, 1, 1, 1},
-				},
-			},
-		},
-		Post: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-					// Master weight = 0
-					Thresholds: [4]byte{0, 1, 1, 1},
-				},
-			},
-		},
-	}
-
-	assert.True(t, change.AccountSignersChanged())
-}
-
-func TestChangeAccountSignersChangedMasterKeyAdded(t *testing.T) {
-	change := Change{
-		Type: xdr.LedgerEntryTypeAccount,
-		Pre: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-					// Master weight = 0
-					Thresholds: [4]byte{0, 1, 1, 1},
-				},
-			},
-		},
-		Post: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-					// Master weight = 1
-					Thresholds: [4]byte{1, 1, 1, 1},
-				},
-			},
-		},
-	}
-
-	assert.True(t, change.AccountSignersChanged())
-}
-
-func TestChangeAccountSignersChangedSignerAdded(t *testing.T) {
-	change := Change{
-		Type: xdr.LedgerEntryTypeAccount,
-		Pre: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-					Signers:   []xdr.Signer{},
-				},
-			},
-		},
-		Post: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-					Signers: []xdr.Signer{
-						{
-							Key:    xdr.MustSigner("GCCCU34WDY2RATQTOOQKY6SZWU6J5DONY42SWGW2CIXGW4LICAGNRZKX"),
-							Weight: 1,
-						},
-					},
-				},
-			},
-		},
-	}
-
-	assert.True(t, change.AccountSignersChanged())
-}
-
-func TestChangeAccountSignersChangedSignerRemoved(t *testing.T) {
-	change := Change{
-		Type: xdr.LedgerEntryTypeAccount,
-		Pre: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-					Signers: []xdr.Signer{
-						{
-							Key:    xdr.MustSigner("GCCCU34WDY2RATQTOOQKY6SZWU6J5DONY42SWGW2CIXGW4LICAGNRZKX"),
-							Weight: 1,
-						},
-					},
-				},
-			},
-		},
-		Post: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-					Signers:   []xdr.Signer{},
-				},
-			},
-		},
-	}
-
-	assert.True(t, change.AccountSignersChanged())
-}
-
-func TestChangeAccountSignersChangedSignerWeightChanged(t *testing.T) {
-	change := Change{
-		Type: xdr.LedgerEntryTypeAccount,
-		Pre: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-					Signers: []xdr.Signer{
-						{
-							Key:    xdr.MustSigner("GCCCU34WDY2RATQTOOQKY6SZWU6J5DONY42SWGW2CIXGW4LICAGNRZKX"),
-							Weight: 1,
-						},
-					},
-				},
-			},
-		},
-		Post: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-					Signers: []xdr.Signer{
-						{
-							Key:    xdr.MustSigner("GCCCU34WDY2RATQTOOQKY6SZWU6J5DONY42SWGW2CIXGW4LICAGNRZKX"),
-							Weight: 2,
-						},
-					},
-				},
-			},
-		},
-	}
-
-	assert.True(t, change.AccountSignersChanged())
-}
-
-func TestChangeAccountSignersChangedSponsorAdded(t *testing.T) {
-	sponsor, err := xdr.AddressToAccountId("GBADGWKHSUFOC4C7E3KXKINZSRX5KPHUWHH67UGJU77LEORGVLQ3BN3B")
-	assert.NoError(t, err)
-
-	change := Change{
-		Type: xdr.LedgerEntryTypeAccount,
-		Pre: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-					Signers: []xdr.Signer{
-						{
-							Key:    xdr.MustSigner("GCCCU34WDY2RATQTOOQKY6SZWU6J5DONY42SWGW2CIXGW4LICAGNRZKX"),
-							Weight: 1,
-						},
-					},
-				},
-			},
-		},
-		Post: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-					Signers: []xdr.Signer{
-						{
-							Key:    xdr.MustSigner("GCCCU34WDY2RATQTOOQKY6SZWU6J5DONY42SWGW2CIXGW4LICAGNRZKX"),
-							Weight: 1,
-						},
-					},
-					Ext: xdr.AccountEntryExt{
-						V1: &xdr.AccountEntryExtensionV1{
-							Ext: xdr.AccountEntryExtensionV1Ext{
-								V2: &xdr.AccountEntryExtensionV2{
-									SignerSponsoringIDs: []xdr.SponsorshipDescriptor{
-										&sponsor,
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	assert.True(t, change.AccountSignersChanged())
-}
-
-func TestChangeAccountSignersChangedSponsorRemoved(t *testing.T) {
-	sponsor, err := xdr.AddressToAccountId("GBADGWKHSUFOC4C7E3KXKINZSRX5KPHUWHH67UGJU77LEORGVLQ3BN3B")
-	assert.NoError(t, err)
-
-	change := Change{
-		Type: xdr.LedgerEntryTypeAccount,
-		Pre: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-					Signers: []xdr.Signer{
-						{
-							Key:    xdr.MustSigner("GCCCU34WDY2RATQTOOQKY6SZWU6J5DONY42SWGW2CIXGW4LICAGNRZKX"),
-							Weight: 1,
-						},
-					},
-					Ext: xdr.AccountEntryExt{
-						V1: &xdr.AccountEntryExtensionV1{
-							Ext: xdr.AccountEntryExtensionV1Ext{
-								V2: &xdr.AccountEntryExtensionV2{
-									SignerSponsoringIDs: []xdr.SponsorshipDescriptor{
-										&sponsor,
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-		Post: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-					Signers: []xdr.Signer{
-						{
-							Key:    xdr.MustSigner("GCCCU34WDY2RATQTOOQKY6SZWU6J5DONY42SWGW2CIXGW4LICAGNRZKX"),
-							Weight: 1,
-						},
-					},
-				},
-			},
-		},
-	}
-
-	assert.True(t, change.AccountSignersChanged())
-}
-
-func TestChangeAccountSignersChangedSponsorChanged(t *testing.T) {
-	sponsor, err := xdr.AddressToAccountId("GBADGWKHSUFOC4C7E3KXKINZSRX5KPHUWHH67UGJU77LEORGVLQ3BN3B")
-	assert.NoError(t, err)
-
-	newSponsor, err := xdr.AddressToAccountId("GB2Y6D5QFDJSCR6GSBO5D2LOLGZI4RVPRGZSSPLIFWNJZ7SL73TOMXAQ")
-	assert.NoError(t, err)
-
-	change := Change{
-		Type: xdr.LedgerEntryTypeAccount,
-		Pre: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-					Signers: []xdr.Signer{
-						{
-							Key:    xdr.MustSigner("GCCCU34WDY2RATQTOOQKY6SZWU6J5DONY42SWGW2CIXGW4LICAGNRZKX"),
-							Weight: 1,
-						},
-					},
-					Ext: xdr.AccountEntryExt{
-						V1: &xdr.AccountEntryExtensionV1{
-							Ext: xdr.AccountEntryExtensionV1Ext{
-								V2: &xdr.AccountEntryExtensionV2{
-									SignerSponsoringIDs: []xdr.SponsorshipDescriptor{
-										&sponsor,
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-		Post: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 10,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeAccount,
-				Account: &xdr.AccountEntry{
-					AccountId: xdr.MustAddress("GC3C4AKRBQLHOJ45U4XG35ESVWRDECWO5XLDGYADO6DPR3L7KIDVUMML"),
-					Signers: []xdr.Signer{
-						{
-							Key:    xdr.MustSigner("GCCCU34WDY2RATQTOOQKY6SZWU6J5DONY42SWGW2CIXGW4LICAGNRZKX"),
-							Weight: 1,
-						},
-					},
-					Ext: xdr.AccountEntryExt{
-						V1: &xdr.AccountEntryExtensionV1{
-							Ext: xdr.AccountEntryExtensionV1Ext{
-								V2: &xdr.AccountEntryExtensionV2{
-									SignerSponsoringIDs: []xdr.SponsorshipDescriptor{
-										&newSponsor,
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	assert.True(t, change.AccountSignersChanged())
 }

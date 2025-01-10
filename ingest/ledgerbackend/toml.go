@@ -2,11 +2,10 @@ package ledgerbackend
 
 import (
 	"bytes"
+	_ "embed"
 	"fmt"
-	"io/ioutil"
-	"os/exec"
+	"os"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/stellar/go/support/errors"
@@ -14,6 +13,16 @@ import (
 	"github.com/stellar/go/xdr"
 
 	"github.com/pelletier/go-toml"
+)
+
+var (
+	//go:embed configs/captive-core-pubnet.cfg
+	PubnetDefaultConfig []byte
+
+	//go:embed configs/captive-core-testnet.cfg
+	TestnetDefaultConfig []byte
+
+	defaultBucketListDBPageSize uint = 12
 )
 
 const (
@@ -77,17 +86,26 @@ type captiveCoreTomlValues struct {
 	PeerPort          uint     `toml:"PEER_PORT,omitempty"`
 	// we cannot omitempty because 0 is a valid configuration for FAILURE_SAFETY
 	// and the default is -1
-	FailureSafety                        int                  `toml:"FAILURE_SAFETY"`
-	UnsafeQuorum                         bool                 `toml:"UNSAFE_QUORUM,omitempty"`
-	RunStandalone                        bool                 `toml:"RUN_STANDALONE,omitempty"`
-	ArtificiallyAccelerateTimeForTesting bool                 `toml:"ARTIFICIALLY_ACCELERATE_TIME_FOR_TESTING,omitempty"`
-	HomeDomains                          []HomeDomain         `toml:"HOME_DOMAINS,omitempty"`
-	Validators                           []Validator          `toml:"VALIDATORS,omitempty"`
-	HistoryEntries                       map[string]History   `toml:"-"`
-	QuorumSetEntries                     map[string]QuorumSet `toml:"-"`
-	UseBucketListDB                      bool                 `toml:"EXPERIMENTAL_BUCKETLIST_DB,omitempty"`
-	BucketListDBPageSizeExp              *uint                `toml:"EXPERIMENTAL_BUCKETLIST_DB_INDEX_PAGE_SIZE_EXPONENT,omitempty"`
-	BucketListDBCutoff                   *uint                `toml:"EXPERIMENTAL_BUCKETLIST_DB_INDEX_CUTOFF,omitempty"`
+	FailureSafety                         int                  `toml:"FAILURE_SAFETY"`
+	UnsafeQuorum                          bool                 `toml:"UNSAFE_QUORUM,omitempty"`
+	RunStandalone                         bool                 `toml:"RUN_STANDALONE,omitempty"`
+	ArtificiallyAccelerateTimeForTesting  bool                 `toml:"ARTIFICIALLY_ACCELERATE_TIME_FOR_TESTING,omitempty"`
+	PreferredPeers                        []string             `toml:"PREFERRED_PEERS,omitempty"`
+	PreferredPeerKeys                     []string             `toml:"PREFERRED_PEER_KEYS,omitempty"`
+	PreferredPeersOnly                    bool                 `toml:"PREFERRED_PEERS_ONLY,omitempty"`
+	HomeDomains                           []HomeDomain         `toml:"HOME_DOMAINS,omitempty"`
+	Validators                            []Validator          `toml:"VALIDATORS,omitempty"`
+	HistoryEntries                        map[string]History   `toml:"-"`
+	QuorumSetEntries                      map[string]QuorumSet `toml:"-"`
+	BucketListDBPageSizeExp               *uint                `toml:"BUCKETLIST_DB_INDEX_PAGE_SIZE_EXPONENT,omitempty"`
+	BucketListDBCutoff                    *uint                `toml:"BUCKETLIST_DB_INDEX_CUTOFF,omitempty"`
+	DeprecatedSqlLedgerState              *bool                `toml:"DEPRECATED_SQL_LEDGER_STATE,omitempty"`
+	EnableSorobanDiagnosticEvents         *bool                `toml:"ENABLE_SOROBAN_DIAGNOSTIC_EVENTS,omitempty"`
+	TestingMinimumPersistentEntryLifetime *uint                `toml:"TESTING_MINIMUM_PERSISTENT_ENTRY_LIFETIME,omitempty"`
+	TestingSorobanHighLimitOverride       *bool                `toml:"TESTING_SOROBAN_HIGH_LIMIT_OVERRIDE,omitempty"`
+	EnableDiagnosticsForTxSubmission      *bool                `toml:"ENABLE_DIAGNOSTICS_FOR_TX_SUBMISSION,omitempty"`
+	EnableEmitSorobanTransactionMetaExtV1 *bool                `toml:"EMIT_SOROBAN_TRANSACTION_META_EXT_V1,omitempty"`
+	EnableEmitLedgerCloseMetaExtV1        *bool                `toml:"EMIT_LEDGER_CLOSE_META_EXT_V1,omitempty"`
 }
 
 // QuorumSetIsConfigured returns true if there is a quorum set defined in the configuration.
@@ -285,7 +303,7 @@ func (c *CaptiveCoreToml) unmarshal(data []byte, strict bool) error {
 		return err
 	} else if err = toml.NewDecoder(bytes.NewReader(withoutPlaceHolders)).Strict(strict).Decode(&body); err != nil {
 		if message := err.Error(); strings.HasPrefix(message, "undecoded keys") {
-			return fmt.Errorf(strings.Replace(
+			return errors.New(strings.Replace(
 				message,
 				"undecoded keys",
 				"these fields are not supported by captive core",
@@ -322,20 +340,30 @@ type CaptiveCoreTomlParams struct {
 	Strict bool
 	// If true, specifies that captive core should be invoked with on-disk rather than in-memory option for ledger state
 	UseDB bool
-	// the path to the core binary, used to introspect core at runtie, determine some toml capabilities
+	// the path to the core binary, used to introspect core at runtime, determine some toml capabilities
 	CoreBinaryPath string
+	// Enforce EnableSorobanDiagnosticEvents and EnableDiagnosticsForTxSubmission when not disabled explicitly
+	EnforceSorobanDiagnosticEvents bool
+	// Enfore EnableSorobanTransactionMetaExtV1 when not disabled explicitly
+	EnforceSorobanTransactionMetaExtV1 bool
 }
 
 // NewCaptiveCoreTomlFromFile constructs a new CaptiveCoreToml instance by merging configuration
 // from the toml file located at `configPath` and the configuration provided by `params`.
 func NewCaptiveCoreTomlFromFile(configPath string, params CaptiveCoreTomlParams) (*CaptiveCoreToml, error) {
-	var captiveCoreToml CaptiveCoreToml
-	data, err := ioutil.ReadFile(configPath)
+	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, errors.Wrap(err, "could not load toml path")
 	}
+	return NewCaptiveCoreTomlFromData(data, params)
+}
 
-	if err = captiveCoreToml.unmarshal(data, params.Strict); err != nil {
+// NewCaptiveCoreTomlFromData constructs a new CaptiveCoreToml instance by merging configuration
+// from the toml data  and the configuration provided by `params`.
+func NewCaptiveCoreTomlFromData(data []byte, params CaptiveCoreTomlParams) (*CaptiveCoreToml, error) {
+	var captiveCoreToml CaptiveCoreToml
+
+	if err := captiveCoreToml.unmarshal(data, params.Strict); err != nil {
 		return nil, errors.Wrap(err, "could not unmarshal captive core toml")
 	}
 	// disallow setting BUCKET_DIR_PATH through a file since it can cause multiple
@@ -344,14 +372,13 @@ func NewCaptiveCoreTomlFromFile(configPath string, params CaptiveCoreTomlParams)
 		return nil, errors.New("could not unmarshal captive core toml: setting BUCKET_DIR_PATH is disallowed for Captive Core, use CAPTIVE_CORE_STORAGE_PATH instead")
 	}
 
-	if err = captiveCoreToml.validate(params); err != nil {
+	if err := captiveCoreToml.validate(params); err != nil {
 		return nil, errors.Wrap(err, "invalid captive core toml")
 	}
 
 	if len(captiveCoreToml.HistoryEntries) > 0 {
 		log.Warnf(
-			"Configuring captive core with history archive from %s instead of %v",
-			configPath,
+			"Configuring captive core with history archive from %s",
 			params.HistoryArchiveURLs,
 		)
 	}
@@ -416,49 +443,20 @@ func (c *CaptiveCoreToml) CatchupToml() (*CaptiveCoreToml, error) {
 	return offline, nil
 }
 
-func (c *CaptiveCoreToml) checkCoreVersion(coreBinaryPath string) bool {
-	if coreBinaryPath == "" {
-		return false
-	}
-
-	versionRaw, err := exec.Command(coreBinaryPath, "version").Output()
-	if err != nil {
-		return false
-	}
-
-	re := regexp.MustCompile(`\D*(\d*)\.(\d*).*`)
-	versionStr := re.FindStringSubmatch(string(versionRaw))
-	if err != nil || len(versionStr) != 3 {
-		return false
-	}
-
-	var version [2]int
-	for i := 1; i < len(versionStr); i++ {
-		val, err := strconv.Atoi((versionStr[i]))
-		if err != nil {
-			return false
-		}
-
-		version[i-1] = val
-	}
-
-	// Supports version 19.6 and above
-	return version[0] > 19 || (version[0] == 19 && version[1] >= 6)
-}
-
 func (c *CaptiveCoreToml) setDefaults(params CaptiveCoreTomlParams) {
 	if params.UseDB && !c.tree.Has("DATABASE") {
 		c.Database = "sqlite3://stellar.db"
 	}
 
-	if def := c.tree.Has("EXPERIMENTAL_BUCKETLIST_DB"); !def && params.UseDB && c.checkCoreVersion(params.CoreBinaryPath) {
-		c.UseBucketListDB = true
+	deprecatedSqlLedgerState := false
+	if !params.UseDB {
+		deprecatedSqlLedgerState = true
+	} else {
+		if !c.tree.Has("BUCKETLIST_DB_INDEX_PAGE_SIZE_EXPONENT") {
+			c.BucketListDBPageSizeExp = &defaultBucketListDBPageSize
+		}
 	}
-
-	if c.UseBucketListDB && !c.tree.Has("EXPERIMENTAL_BUCKETLIST_DB_INDEX_PAGE_SIZE_EXPONENT") {
-		n := uint(12)
-		c.BucketListDBPageSizeExp = &n // Set default page size to 4KB
-	}
+	c.DeprecatedSqlLedgerState = &deprecatedSqlLedgerState
 
 	if !c.tree.Has("NETWORK_PASSPHRASE") {
 		c.NetworkPassphrase = params.NetworkPassphrase
@@ -488,9 +486,30 @@ func (c *CaptiveCoreToml) setDefaults(params CaptiveCoreTomlParams) {
 		for i, val := range params.HistoryArchiveURLs {
 			name := fmt.Sprintf("HISTORY.h%d", i)
 			c.HistoryEntries[c.tablePlaceholders.newPlaceholder(name)] = History{
-				Get: fmt.Sprintf("curl -sf %s/{0} -o {1}", val),
+				Get: fmt.Sprintf("curl -sf %s/{0} -o {1}", strings.TrimSuffix(val, "/")),
 			}
 		}
+	}
+
+	if params.EnforceSorobanDiagnosticEvents {
+		enforceOption(&c.EnableSorobanDiagnosticEvents)
+		enforceOption(&c.EnableDiagnosticsForTxSubmission)
+	}
+	if params.EnforceSorobanTransactionMetaExtV1 {
+		enforceOption(&c.EnableEmitSorobanTransactionMetaExtV1)
+	}
+}
+
+func enforceOption(opt **bool) {
+	if *opt == nil {
+		// We are generating the file from scratch or the user didn't explicitly oppose the option.
+		// Enforce it.
+		t := true
+		*opt = &t
+	}
+	if !**opt {
+		// The user opposed the option, but there is no need to pass it on
+		*opt = nil
 	}
 }
 
@@ -527,10 +546,14 @@ func (c *CaptiveCoreToml) validate(params CaptiveCoreTomlParams) error {
 		)
 	}
 
-	if def := c.tree.Has("EXPERIMENTAL_BUCKETLIST_DB"); def && !params.UseDB {
-		return fmt.Errorf(
-			"BucketListDB enabled in captive core config file, requires Horizon flag --captive-core-use-db",
-		)
+	if c.tree.Has("DEPRECATED_SQL_LEDGER_STATE") {
+		if params.UseDB && *c.DeprecatedSqlLedgerState {
+			return fmt.Errorf("CAPTIVE_CORE_USE_DB parameter is set to true, indicating stellar-core on-disk mode," +
+				" in which DEPRECATED_SQL_LEDGER_STATE must be set to false")
+		} else if !params.UseDB && !*c.DeprecatedSqlLedgerState {
+			return fmt.Errorf("CAPTIVE_CORE_USE_DB parameter is set to false, indicating stellar-core in-memory mode," +
+				" in which DEPRECATED_SQL_LEDGER_STATE must be set to true")
+		}
 	}
 
 	homeDomainSet := map[string]HomeDomain{}

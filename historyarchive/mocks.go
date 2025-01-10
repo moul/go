@@ -10,6 +10,11 @@ type MockArchive struct {
 	mock.Mock
 }
 
+func (m *MockArchive) GetLatestLedgerSequence() (uint32, error) {
+	a := m.Called()
+	return a.Get(0).(uint32), a.Error(1)
+}
+
 func (m *MockArchive) GetCheckpointManager() CheckpointManager {
 	a := m.Called()
 	return a.Get(0).(CheckpointManager)
@@ -102,4 +107,43 @@ func (m *MockArchive) GetXdrStreamForHash(hash Hash) (*XdrStream, error) {
 func (m *MockArchive) GetXdrStream(pth string) (*XdrStream, error) {
 	a := m.Called(pth)
 	return a.Get(0).(*XdrStream), a.Error(1)
+}
+
+func (m *MockArchive) GetStats() []ArchiveStats {
+	a := m.Called()
+	return a.Get(0).([]ArchiveStats)
+}
+
+type MockArchiveStats struct {
+	mock.Mock
+}
+
+func (m *MockArchiveStats) GetRequests() uint32 {
+	a := m.Called()
+	return a.Get(0).(uint32)
+}
+
+func (m *MockArchiveStats) GetDownloads() uint32 {
+	a := m.Called()
+	return a.Get(0).(uint32)
+}
+
+func (m *MockArchiveStats) GetUploads() uint32 {
+	a := m.Called()
+	return a.Get(0).(uint32)
+}
+
+func (m *MockArchiveStats) GetBackendName() string {
+	a := m.Called()
+	return a.Get(0).(string)
+}
+
+func (m *MockArchiveStats) GetCacheHits() uint32 {
+	a := m.Called()
+	return a.Get(0).(uint32)
+}
+
+func (m *MockArchiveStats) GetCacheBandwidth() uint64 {
+	a := m.Called()
+	return a.Get(0).(uint64)
 }

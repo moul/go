@@ -107,7 +107,7 @@ func (x *XdrStream) ExpectedHash() ([sha256.Size]byte, bool) {
 func (x *XdrStream) Close() error {
 	if x.validateHash {
 		// Read all remaining data from rdr
-		_, err := io.Copy(ioutil.Discard, x.rdr)
+		_, err := io.Copy(io.Discard, x.rdr)
 		if err != nil {
 			// close the internal readers to avoid memory leaks
 			x.closeReaders()
@@ -134,11 +134,7 @@ func (x *XdrStream) closeReaders() error {
 			err = err2
 		}
 	}
-	if x.rdr2 != nil {
-		if err2 := x.rdr2.Close(); err2 != nil {
-			err = err2
-		}
-	}
+
 	if x.gzipReader != nil {
 		if err2 := x.gzipReader.Close(); err2 != nil {
 			err = err2
